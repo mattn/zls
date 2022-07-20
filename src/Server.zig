@@ -20,6 +20,7 @@ const Ast = std.zig.Ast;
 const known_folders = @import("known-folders");
 const tracy = @import("tracy.zig");
 const uri_utils = @import("uri.zig");
+const anal2 = @import("anal2/anal2.zig");
 
 // Server fields
 
@@ -200,20 +201,6 @@ fn showMessage(message_type: types.MessageType, message: []const u8) !void {
     });
 }
 
-// TODO: Is this correct or can we get a better end?
-fn astLocationToRange(loc: Ast.Location) types.Range {
-    return .{
-        .start = .{
-            .line = @intCast(i64, loc.line),
-            .character = @intCast(i64, loc.column),
-        },
-        .end = .{
-            .line = @intCast(i64, loc.line),
-            .character = @intCast(i64, loc.column),
-        },
-    };
-}
-
 fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: DocumentStore.Handle) !void {
     const tracy_zone = tracy.trace(@src());
     defer tracy_zone.end();
@@ -230,7 +217,7 @@ fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: 
         try tree.renderError(err, fbs.writer());
 
         try diagnostics.append(.{
-            .range = astLocationToRange(loc),
+            .range = ast.astLocationToRange(loc),
             .severity = .Error,
             .code = @tagName(err.tag),
             .source = "zls",
@@ -239,7 +226,9 @@ fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: 
         });
     }
 
-    if (server.config.enable_unused_variable_warnings) {
+    if (server.config.use_stage2_analysis) {
+        try anal2.getDiagnostics(server.allocator, tree, &diagnostics);
+    } else if (server.config.enable_unused_variable_warnings) {
         scopes: for (handle.document_scope.scopes) |scope| {
             const scope_data = switch (scope.data) {
                 .function => |f| b: {
@@ -284,7 +273,7 @@ fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: 
 
                 if (identifier_count <= 1)
                     try diagnostics.append(.{
-                        .range = astLocationToRange(tree.tokenLocation(0, name_token_index)),
+                        .range = ast.astLocationToRange(tree.tokenLocation(0, name_token_index)),
                         .severity = .Error,
                         .code = "unused_variable",
                         .source = "zls",
@@ -322,7 +311,7 @@ fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: 
 
                 if (std.mem.startsWith(u8, import_str, "\".")) {
                     try diagnostics.append(.{
-                        .range = astLocationToRange(tree.tokenLocation(0, import_str_token)),
+                        .range = ast.astLocationToRange(tree.tokenLocation(0, import_str_token)),
                         .severity = .Hint,
                         .code = "useless_dot",
                         .source = "zls",
@@ -355,7 +344,7 @@ fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: 
                             const func_name = tree.tokenSlice(name_token);
                             if (!is_type_function and !analysis.isCamelCase(func_name)) {
                                 try diagnostics.append(.{
-                                    .range = astLocationToRange(loc),
+                                    .range = ast.astLocationToRange(loc),
                                     .severity = .Hint,
                                     .code = "bad_style",
                                     .source = "zls",
@@ -363,7 +352,7 @@ fn publishDiagnostics(server: *Server, arena: *std.heap.ArenaAllocator, handle: 
                                 });
                             } else if (is_type_function and !analysis.isPascalCase(func_name)) {
                                 try diagnostics.append(.{
-                                    .range = astLocationToRange(loc),
+                                    .range = ast.astLocationToRange(loc),
                                     .severity = .Hint,
                                     .code = "bad_style",
                                     .source = "zls",
